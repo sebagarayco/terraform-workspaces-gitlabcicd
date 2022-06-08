@@ -1,0 +1,85 @@
+# GitLab
+image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
+variables:
+  TF_ROOT: ${CI_PROJECT_DIR}/
+  TF_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/invap_terraform_state
+cache:
+  key: production
+  paths:
+    - ${TF_ROOT}/.terraform
+before_script:
+  - cd ${TF_ROOT}
+  - case "$CI_COMMIT_REF_SLUG" in
+    main) WORKSPACE_NAME="prod" ;;
+    *) WORKSPACE_NAME="$CI_COMMIT_REF_SLUG" ;;
+    esac
+  - rm -rf .terraform
+  - terraform --version
+  - terraform init
+  - terraform workspace select $WORKSPACE_NAME || terraform workspace new $WORKSPACE_NAME
+
+stages:
+  - prepare
+  - validate
+  - build
+  - deploy
+  - cleanup
+init:
+  stage: prepare
+  script:
+    - gitlab-terraform init
+
+validate:
+  stage: validate
+  variables: 
+        TF_VAR_ACCESS_ID: ${AWS_ACCESS_KEY_ID}
+        TF_VAR_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
+  script:
+    - gitlab-terraform validate
+
+plan:
+  stage: build
+  variables: 
+        TF_VAR_ACCESS_ID: ${AWS_ACCESS_KEY_ID}
+        TF_VAR_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
+  script:
+    - gitlab-terraform plan
+    - gitlab-terraform plan-json
+  artifacts:
+    name: plan
+    paths:
+      - ${TF_ROOT}/plan.cache
+    reports:
+      terraform: ${TF_ROOT}/plan.json
+
+apply:
+  stage: deploy
+  variables: 
+        TF_VAR_ACCESS_ID: ${AWS_ACCESS_KEY_ID}
+        TF_VAR_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
+  environment:
+    name: production
+  script:
+    - gitlab-terraform apply
+  dependencies:
+    - plan
+  when: manual
+  only:
+    - main
+
+destroy:
+  stage: cleanup
+  variables: 
+        TF_VAR_ACCESS_ID: ${AWS_ACCESS_KEY_ID}
+        TF_VAR_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
+  environment:
+    name: production
+  script:
+    - gitlab-terraform destroy
+  dependencies:
+    - apply
+  when: manual
+  needs: 
+    - apply
+  only:
+    - main
